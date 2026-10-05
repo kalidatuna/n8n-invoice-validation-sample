@@ -1,0 +1,72 @@
+{
+  "name": "Synthetic invoice validation before human review",
+  "nodes": [
+    {
+      "id": "manual-start",
+      "name": "Manual start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "synthetic-input",
+      "name": "Synthetic invoices",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{\"supplier_id\":\"SYNTHETIC-SUPPLIER\",\"currency\":\"EUR\",\"invoice_date\":\"2026-10-05\",\"subtotal\":\"100.00\",\"tax\":\"20.00\",\"total\":\"120.00\",\"invoice_id\":\"DEMO-001\"},{\"supplier_id\":\"SYNTHETIC-SUPPLIER\",\"currency\":\"EUR\",\"invoice_date\":\"2026-10-05\",\"subtotal\":\"100.00\",\"tax\":\"20.00\",\"total\":\"121.00\",\"invoice_id\":\"DEMO-002\"},{\"supplier_id\":\"SYNTHETIC-SUPPLIER\",\"currency\":\"EUR\",\"invoice_date\":\"2026-02-30\",\"subtotal\":\"100.00\",\"tax\":\"20.00\",\"total\":\"120.00\",\"invoice_id\":\"DEMO-003\"},{\"supplier_id\":\"SYNTHETIC-SUPPLIER\",\"currency\":\"EUR\",\"invoice_date\":\"2026-10-05\",\"subtotal\":\"100.00\",\"tax\":\"20.00\",\"total\":\"120.00\",\"invoice_id\":\"DEMO-004\"},{\"supplier_id\":\"SYNTHETIC-SUPPLIER\",\"currency\":\"EUR\",\"invoice_date\":\"2026-10-05\",\"subtotal\":\"100.00\",\"tax\":\"20.00\",\"total\":\"120.00\",\"invoice_id\":\"DEMO-004\"}].map(json => ({json}));"
+      }
+    },
+    {
+      "id": "validate-invoices",
+      "name": "Validate before review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "'use strict';\n\n// Decimal strings for EUR, USD and GBP. This code never approves or pays invoices.\nconst CURRENCIES = new Set(['EUR', 'USD', 'GBP']);\nfunction minorUnits(value) {\n  if (typeof value !== 'string' || value.length > 24 ||\n      !/^(0|[1-9]\\d*)(\\.\\d{1,2})?$/.test(value)) return null;\n  const [whole, fraction = ''] = value.split('.');\n  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));\n}\nfunction validDate(value) {\n  if (typeof value !== 'string' || !/^[1-9]\\d{3}-\\d{2}-\\d{2}$/.test(value)) return false;\n  const [year, month, day] = value.split('-').map(Number);\n  const date = new Date(Date.UTC(year, month - 1, day));\n  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 &&\n    date.getUTCDate() === day;\n}\nfunction textId(value) {\n  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;\n}\nfunction validateInvoice(record) {\n  const issues = [];\n  const normalized = {};\n  if (!record || typeof record !== 'object' || Array.isArray(record)) {\n    return { status: 'needs_correction', checks_passed: false, review_required: true,\n      issues: [{ field: '$', code: 'invalid_record' }], normalized };\n  }\n  for (const field of ['invoice_id', 'supplier_id']) {\n    normalized[field] = textId(record[field]);\n    if (!normalized[field]) issues.push({ field, code: 'required_string' });\n  }\n  normalized.currency = record.currency;\n  if (!CURRENCIES.has(record.currency)) issues.push({ field: 'currency', code: 'unsupported_currency' });\n  normalized.invoice_date = record.invoice_date;\n  if (!validDate(record.invoice_date)) issues.push({ field: 'invoice_date', code: 'invalid_date' });\n  const amounts = {};\n  for (const field of ['subtotal', 'tax', 'total']) {\n    amounts[field] = minorUnits(record[field]);\n    if (amounts[field] === null) issues.push({ field, code: 'invalid_decimal_string' });\n    else normalized[field + '_minor'] = amounts[field].toString();\n  }\n  if (Object.values(amounts).every(value => value !== null) &&\n      amounts.subtotal + amounts.tax !== amounts.total) {\n    issues.push({ field: 'total', code: 'total_mismatch' });\n  }\n  return { status: issues.length ? 'needs_correction' : 'ready_for_review',\n    checks_passed: issues.length === 0, review_required: true, issues, normalized };\n}\nfunction validateBatch(records) {\n  if (!Array.isArray(records)) throw new TypeError('Expected an array of invoice records');\n  const results = records.map(validateInvoice);\n  const counts = new Map();\n  const keys = results.map(result => {\n    const n = result.normalized;\n    if (!n.invoice_id || !n.supplier_id) return null;\n    return JSON.stringify([n.supplier_id, n.invoice_id]);\n  });\n  for (const key of keys) if (key !== null) counts.set(key, (counts.get(key) || 0) + 1);\n  for (let i = 0; i < results.length; i++) {\n    if (keys[i] !== null && counts.get(keys[i]) > 1) {\n      results[i].issues.push({ field: 'invoice_id', code: 'duplicate_in_batch' });\n      results[i].status = 'needs_correction';\n      results[i].checks_passed = false;\n    }\n  }\n  return results;\n}\n\n\n\nconst items = $input.all();\nconst results = validateBatch(items.map(item => item.json));\nreturn items.map((item, index) => ({json: {invoice: item.json, validation: results[index]}, pairedItem: {item: index}}));\n"
+      }
+    }
+  ],
+  "connections": {
+    "Manual start": {
+      "main": [
+        [
+          {
+            "node": "Synthetic invoices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synthetic invoices": {
+      "main": [
+        [
+          {
+            "node": "Validate before review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
