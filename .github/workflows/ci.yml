@@ -1,0 +1,30 @@
+name: Validate invoice sample
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Rebuild n8n artifacts
+        run: node build-workflow.cjs
+      - name: Check committed artifacts match the source
+        run: git diff --exit-code -- n8n-code-node.js workflow.json
+      - name: Run local and generated-code tests
+        run: node --test test.cjs
