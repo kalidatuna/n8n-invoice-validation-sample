@@ -10,10 +10,13 @@ Requires Node.js 22 or newer. No installation, account, API key, or network acce
 
 ~~~sh
 node build-workflow.cjs
+git diff --exit-code -- n8n-code-node.js workflow.json
 node --test test.cjs
 ~~~
 
-The 22 tests exercise the generated n8n Code-node JavaScript with synthetic n8n input/output objects. They do not constitute an import or deployment test in a running n8n instance.
+The 26 tests cover the validator and both generated n8n artifacts with synthetic n8n input/output objects, including field-specific errors for amounts and dates with trailing line breaks. They do not constitute an import or deployment test in a running n8n instance.
+
+GitHub Actions runs these checks on pull requests and pushes to `main` using Node.js 22. The artifact check fails if rebuilding changes `n8n-code-node.js` or `workflow.json`, so the committed files must match `invoice-validator.cjs` and `build-workflow.cjs`. After an intentional source change, rebuild and commit both generated files alongside it.
 
 ## Use in n8n
 
@@ -47,4 +50,3 @@ Output contains the original invoice, a validation result, and an n8n paired-ite
 ## License
 
 MIT. See LICENSE.
-

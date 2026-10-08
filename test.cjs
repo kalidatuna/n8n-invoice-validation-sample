@@ -29,6 +29,27 @@ test('negative amount is rejected for this invoice-only sample', () => assert.eq
 test('scientific notation is rejected', () => assert.equal(minorUnits('1e2'), null));
 test('localized decimal needs an explicit mapping', () => assert.equal(minorUnits('1,20'), null));
 test('single fractional digit is normalized', () => assert.equal(minorUnits('1.2'), 120n));
+test('decimal strings reject trailing line terminators', () => {
+  for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    for (const amount of ['1', '1.2', '1.20']) {
+      assert.equal(minorUnits(amount + suffix), null, JSON.stringify(amount + suffix));
+    }
+  }
+});
+test('calendar date strings reject trailing line terminators', () => {
+  for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    assert.equal(validDate('2026-10-05' + suffix), false, JSON.stringify(suffix));
+  }
+});
+test('trailing line breaks produce field-specific correction issues', () => {
+  for (const field of ['subtotal', 'tax', 'total', 'invoice_date']) {
+    const result = validateInvoice({ ...base, [field]: base[field] + '\n' });
+    const expectedCode = field === 'invoice_date' ? 'invalid_date' : 'invalid_decimal_string';
+    assert.equal(result.status, 'needs_correction');
+    assert.equal(result.checks_passed, false);
+    assert.ok(result.issues.some(issue => issue.field === field && issue.code === expectedCode));
+  }
+});
 test('zero tax is valid', () => assert.equal(validateInvoice({ ...base, tax: '0', total: '100.00' }).checks_passed, true));
 test('unsupported currency is rejected', () => assert.ok(codes({ ...base, currency: 'JPY' }).includes('unsupported_currency')));
 test('malformed records produce a correction result', () => {
@@ -56,4 +77,24 @@ test('generated n8n code processes synthetic items and preserves links', () => {
   assert.ok(output.every(item => item.json.validation.review_required === true));
   assert.equal(workflow.active, false);
 });
-
+test('both generated n8n artifacts reject amounts and dates with trailing line breaks', () => {
+  const workflow = JSON.parse(fs.readFileSync('./workflow.json', 'utf8'));
+  const embeddedCode = workflow.nodes.find(n => n.name === 'Validate before review').parameters.jsCode;
+  const standaloneCode = fs.readFileSync('./n8n-code-node.js', 'utf8');
+  const fields = ['subtotal', 'tax', 'total', 'invoice_date'];
+  const input = fields.map((field, index) => ({ json: {
+    ...base, invoice_id: 'INV-' + index, [field]: base[field] + '\n',
+  } }));
+  for (const code of [embeddedCode, standaloneCode]) {
+    const output = vm.runInNewContext('(function(){' + code + '})()', { $input: { all: () => input } });
+    assert.equal(output.length, fields.length);
+    for (const [index, item] of output.entries()) {
+      const validation = item.json.validation;
+      const expectedCode = fields[index] === 'invoice_date' ? 'invalid_date' : 'invalid_decimal_string';
+      assert.equal(validation.status, 'needs_correction');
+      assert.ok(validation.issues.some(issue => issue.field === fields[index] && issue.code === expectedCode));
+      assert.equal(validation.review_required, true);
+      assert.equal(item.pairedItem.item, index);
+    }
+  }
+});
